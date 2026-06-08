@@ -90,10 +90,10 @@ function appKeyboard(): TelegramReplyMarkup | undefined {
 
 function routeFor(text: string) {
   if (text.startsWith("/bill")) {
-    return env("BILL_ASSISTANT_URL");
+    return { name: "\u7e73\u8cbb\u52a9\u7406", url: env("BILL_ASSISTANT_URL") };
   }
   if (text.startsWith("/invest")) {
-    return env("INVEST_ASSISTANT_URL");
+    return { name: "\u6295\u8cc7\u52a9\u7406", url: env("INVEST_ASSISTANT_URL") };
   }
   return null;
 }
@@ -107,7 +107,8 @@ async function forwardUpdate(targetBaseUrl: string, update: TelegramUpdate) {
   });
 
   if (!response.ok) {
-    throw new Error(`Assistant webhook failed: ${response.status} ${await response.text()}`);
+    const body = await response.text();
+    throw new Error(`${response.status} ${body.slice(0, 300)}`);
   }
 }
 
@@ -129,18 +130,35 @@ export default async (req: Request) => {
     return Response.json({ ok: true, routed: "help" });
   }
 
-  const target = routeFor(text);
-  if (!target) {
+  const route = routeFor(text);
+  if (!route) {
     await sendTelegramMessage(chatId, helpText(), appKeyboard());
     return Response.json({ ok: true, routed: "help" });
   }
 
+  if (!route.url || route.url === "https://example.com") {
+    await sendTelegramMessage(
+      chatId,
+      `${route.name}\u9084\u6c92\u6709\u8a2d\u5b9a\u7db2\u5740\uff0c\u8acb\u5148\u5230 Router \u7684 Netlify Environment variables \u88dc\u4e0a\u6b63\u78ba URL\u3002`,
+      appKeyboard(),
+    );
+    return Response.json({ ok: false, routed: route.name, error: "missing target url" }, { status: 502 });
+  }
+
   try {
-    await forwardUpdate(target, update);
-    return Response.json({ ok: true, routed: target });
+    await forwardUpdate(route.url, update);
+    return Response.json({ ok: true, routed: route.url });
   } catch (error) {
     console.error(error);
-    await sendTelegramMessage(chatId, "\u52a9\u7406\u66ab\u6642\u6c92\u6709\u56de\u61c9\uff0c\u8acb\u7a0d\u5f8c\u518d\u8a66\u3002");
+    await sendTelegramMessage(
+      chatId,
+      [
+        `${route.name}\u66ab\u6642\u6c92\u6709\u56de\u61c9\u3002`,
+        "",
+        `\u76ee\u6a19\uff1a${normalizeBaseUrl(route.url)}/api/telegram-webhook`,
+        `\u932f\u8aa4\uff1a${String(error).slice(0, 500)}`,
+      ].join("\n"),
+    );
     return Response.json({ ok: false, error: String(error) }, { status: 502 });
   }
 };
