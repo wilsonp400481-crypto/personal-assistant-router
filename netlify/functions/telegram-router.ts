@@ -45,7 +45,7 @@ function appLinks() {
 }
 
 function investWebhookPath() {
-  return env("INVEST_ASSISTANT_WEBHOOK_PATH") || "/api/telegram-webhook";
+  return env("INVEST_ASSISTANT_WEBHOOK_PATH") || "/.netlify/functions/amber-telegram";
 }
 
 async function sendTelegramMessage(
