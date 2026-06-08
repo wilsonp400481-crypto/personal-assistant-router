@@ -13,6 +13,10 @@ type TelegramUpdate = {
   };
 };
 
+type TelegramReplyMarkup = {
+  inline_keyboard: Array<Array<{ text: string; url: string }>>;
+};
+
 function env(name: string) {
   return Netlify.env.get(name);
 }
@@ -21,14 +25,32 @@ function normalizeBaseUrl(value: string) {
   return value.replace(/\/+$/, "");
 }
 
-async function sendTelegramMessage(chatId: string | number, text: string) {
+function appLinks() {
+  const billAssistantUrl = env("BILL_ASSISTANT_URL");
+  const investAssistantUrl = env("INVEST_ASSISTANT_URL");
+
+  return {
+    billAssistantUrl: billAssistantUrl ? normalizeBaseUrl(billAssistantUrl) : "",
+    investAssistantUrl: investAssistantUrl ? normalizeBaseUrl(investAssistantUrl) : "",
+  };
+}
+
+async function sendTelegramMessage(
+  chatId: string | number,
+  text: string,
+  replyMarkup?: TelegramReplyMarkup,
+) {
   const token = env("TELEGRAM_BOT_TOKEN");
   if (!token) throw new Error("Missing TELEGRAM_BOT_TOKEN");
 
   const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text }),
+    body: JSON.stringify({
+      chat_id: chatId,
+      text,
+      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+    }),
   });
 
   if (!response.ok) {
@@ -38,18 +60,32 @@ async function sendTelegramMessage(chatId: string | number, text: string) {
 
 function helpText() {
   return [
-    "個人助理總入口：",
+    "\u500b\u4eba\u52a9\u7406\u5165\u53e3",
     "",
-    "/invest <問題> - 投資助理",
-    "/bill - 繳費助理",
-    "/bill week - 7 天內待處理帳單",
-    "/bill next - 90 天內待處理帳單",
-    "/bill done <id> [金額] - 標記繳費完成",
+    "/bill - \u8a62\u554f\u7e73\u8cbb\u52a9\u7406",
+    "/bill week - \u67e5\u770b 7 \u5929\u5167\u7684\u5e33\u55ae",
+    "/bill next - \u67e5\u770b 90 \u5929\u5167\u7684\u5e33\u55ae",
+    "/bill done <id> - \u6a19\u8a18\u5df2\u5b8c\u6210",
     "",
-    "範例：",
-    "/invest 台積電最近怎麼看",
-    "/bill week",
+    "/invest <\u554f\u984c> - \u8a62\u554f\u6295\u8cc7\u52a9\u7406",
+    "",
+    "\u4e5f\u53ef\u4ee5\u76f4\u63a5\u9ede\u4e0b\u65b9\u6309\u9215\u958b\u555f PWA\u3002",
   ].join("\n");
+}
+
+function appKeyboard(): TelegramReplyMarkup | undefined {
+  const { billAssistantUrl, investAssistantUrl } = appLinks();
+  const row: Array<{ text: string; url: string }> = [];
+
+  if (billAssistantUrl && billAssistantUrl !== "https://example.com") {
+    row.push({ text: "\u958b\u555f\u7e73\u8cbb PWA", url: billAssistantUrl });
+  }
+
+  if (investAssistantUrl && investAssistantUrl !== "https://example.com") {
+    row.push({ text: "\u958b\u555f\u6295\u8cc7 PWA", url: investAssistantUrl });
+  }
+
+  return row.length ? { inline_keyboard: [row] } : undefined;
 }
 
 function routeFor(text: string) {
@@ -88,14 +124,14 @@ export default async (req: Request) => {
     return Response.json({ ok: true, ignored: true });
   }
 
-  if (text.startsWith("/start") || text.startsWith("/help")) {
-    await sendTelegramMessage(chatId, helpText());
+  if (text.startsWith("/start") || text.startsWith("/help") || text.startsWith("/apps")) {
+    await sendTelegramMessage(chatId, helpText(), appKeyboard());
     return Response.json({ ok: true, routed: "help" });
   }
 
   const target = routeFor(text);
   if (!target) {
-    await sendTelegramMessage(chatId, helpText());
+    await sendTelegramMessage(chatId, helpText(), appKeyboard());
     return Response.json({ ok: true, routed: "help" });
   }
 
@@ -104,7 +140,7 @@ export default async (req: Request) => {
     return Response.json({ ok: true, routed: target });
   } catch (error) {
     console.error(error);
-    await sendTelegramMessage(chatId, "助理暫時無法回應，請稍後再試。");
+    await sendTelegramMessage(chatId, "\u52a9\u7406\u66ab\u6642\u6c92\u6709\u56de\u61c9\uff0c\u8acb\u7a0d\u5f8c\u518d\u8a66\u3002");
     return Response.json({ ok: false, error: String(error) }, { status: 502 });
   }
 };
