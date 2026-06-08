@@ -17,6 +17,15 @@ type TelegramReplyMarkup = {
   inline_keyboard: Array<Array<{ text: string; url: string }>>;
 };
 
+type Bill = {
+  id: number;
+  title: string;
+  due_date: string;
+  amount_estimated: number | null;
+  amount_actual: number | null;
+  status: string;
+};
+
 function env(name: string) {
   return Netlify.env.get(name);
 }
@@ -98,6 +107,127 @@ function routeFor(text: string) {
   return null;
 }
 
+function todayText() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function daysBetween(dateText: string) {
+  const [year, month, day] = dateText.split("-").map(Number);
+  const target = Date.UTC(year, month - 1, day);
+  const [todayYear, todayMonth, todayDay] = todayText().split("-").map(Number);
+  const today = Date.UTC(todayYear, todayMonth - 1, todayDay);
+  return Math.round((target - today) / 86400000);
+}
+
+function formatAmount(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return "\u91d1\u984d\u5f85\u78ba\u8a8d";
+  return `NT$${Math.round(value).toLocaleString("zh-TW")}`;
+}
+
+function statusLabel(status: string) {
+  const labels: Record<string, string> = {
+    pending_amount: "\u5f85\u78ba\u8a8d\u91d1\u984d",
+    pending_payment: "\u5f85\u8655\u7406",
+    pending_confirm: "\u5f85\u78ba\u8a8d\u6263\u6b3e",
+    overdue: "\u5df2\u903e\u671f",
+    paid: "\u5df2\u5b8c\u6210",
+    skipped: "\u5df2\u7565\u904e",
+  };
+  return labels[status] ?? status;
+}
+
+function formatBillLine(bill: Bill) {
+  const days = daysBetween(bill.due_date);
+  const timing = days < 0
+    ? `\u903e\u671f ${Math.abs(days)} \u5929`
+    : days === 0
+      ? "\u4eca\u5929\u5230\u671f"
+      : `${days} \u5929\u5f8c\u5230\u671f`;
+  const amount = bill.amount_actual ?? bill.amount_estimated;
+  return `${bill.id}. ${bill.title} - ${bill.due_date} - ${timing} - ${formatAmount(amount)} - ${statusLabel(bill.status)}`;
+}
+
+async function billApi(baseUrl: string, path: string, init?: RequestInit) {
+  const response = await fetch(`${normalizeBaseUrl(baseUrl)}${path}`, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(init?.headers ?? {}),
+    },
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`${response.status} ${body.slice(0, 300)}`);
+  }
+  return response.json();
+}
+
+async function handleBillCommand(text: string, billAssistantUrl: string) {
+  const parts = text.trim().split(/\s+/);
+  const action = parts[1]?.toLowerCase();
+
+  if (action === "add") {
+    if (parts.length < 4) {
+      return "\u683c\u5f0f\uff1a/bill add <\u540d\u7a31> <YYYY-MM-DD> [\u91d1\u984d]";
+    }
+    const data = await billApi(billAssistantUrl, "/api/bills", {
+      method: "POST",
+      body: JSON.stringify({
+        title: parts[2],
+        due_date: parts[3],
+        amount_estimated: parts[4] ? Number(parts[4]) : null,
+        category: "other",
+        source: "telegram-router",
+      }),
+    });
+    return `\u5df2\u65b0\u589e\uff1a${formatBillLine(data.bill)}`;
+  }
+
+  if (action === "rule") {
+    if (parts.length < 5) {
+      return "\u683c\u5f0f\uff1a/bill rule <\u540d\u7a31> <\u6bcf\u6708\u5e7e\u865f> <\u9593\u9694\u6708\u6578> [\u91d1\u984d]";
+    }
+    const data = await billApi(billAssistantUrl, "/api/rules", {
+      method: "POST",
+      body: JSON.stringify({
+        title: parts[2],
+        due_day: Number(parts[3]),
+        interval_months: Number(parts[4]),
+        amount_estimated: parts[5] ? Number(parts[5]) : null,
+        category: "other",
+      }),
+    });
+    return `\u5df2\u65b0\u589e\u898f\u5247\uff1a${data.rule.title}\uff0c\u6bcf ${data.rule.interval_months} \u500b\u6708 ${data.rule.due_day} \u865f`;
+  }
+
+  if (action === "done" || action === "paid") {
+    if (parts.length < 3) return "\u683c\u5f0f\uff1a/bill done <id> [\u91d1\u984d]";
+    const data = await billApi(billAssistantUrl, `/api/bills/${Number(parts[2])}/paid`, {
+      method: "POST",
+      body: JSON.stringify({ amount_actual: parts[3] ? Number(parts[3]) : undefined }),
+    });
+    return data.bill ? `\u5df2\u5b8c\u6210\uff1a${formatBillLine(data.bill)}` : "\u627e\u4e0d\u5230\u9019\u7b46\u5e33\u55ae\u3002";
+  }
+
+  const days = action === "week" ? 7 : action === "year" ? 365 : 90;
+  await billApi(billAssistantUrl, `/api/generate?days=${days}`);
+  const data = await billApi(billAssistantUrl, `/api/bills?days=${days}`);
+  const bills = (data.bills ?? []) as Bill[];
+
+  if (!bills.length) {
+    return days === 7
+      ? "7 \u5929\u5167\u6c92\u6709\u5f85\u8655\u7406\u5e33\u55ae\u3002"
+      : `${days} \u5929\u5167\u6c92\u6709\u5f85\u8655\u7406\u5e33\u55ae\u3002`;
+  }
+
+  const title = days === 7
+    ? "7 \u5929\u5167\u5e33\u55ae"
+    : days === 365
+      ? "\u4e00\u5e74\u5167\u5e33\u55ae"
+      : "90 \u5929\u5167\u5e33\u55ae";
+  return [title, ...bills.slice(0, 20).map(formatBillLine)].join("\n");
+}
+
 async function forwardUpdate(targetBaseUrl: string, update: TelegramUpdate) {
   const target = `${normalizeBaseUrl(targetBaseUrl)}/api/telegram-webhook`;
   const response = await fetch(target, {
@@ -146,6 +276,12 @@ export default async (req: Request) => {
   }
 
   try {
+    if (text.startsWith("/bill")) {
+      const reply = await handleBillCommand(text, route.url);
+      await sendTelegramMessage(chatId, reply, appKeyboard());
+      return Response.json({ ok: true, routed: "bill-api" });
+    }
+
     await forwardUpdate(route.url, update);
     return Response.json({ ok: true, routed: route.url });
   } catch (error) {
@@ -155,7 +291,7 @@ export default async (req: Request) => {
       [
         `${route.name}\u66ab\u6642\u6c92\u6709\u56de\u61c9\u3002`,
         "",
-        `\u76ee\u6a19\uff1a${normalizeBaseUrl(route.url)}/api/telegram-webhook`,
+        `\u76ee\u6a19\uff1a${normalizeBaseUrl(route.url)}${text.startsWith("/bill") ? "/api/bills" : "/api/telegram-webhook"}`,
         `\u932f\u8aa4\uff1a${String(error).slice(0, 500)}`,
       ].join("\n"),
     );
