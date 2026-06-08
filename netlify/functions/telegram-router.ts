@@ -44,6 +44,10 @@ function appLinks() {
   };
 }
 
+function investWebhookPath() {
+  return env("INVEST_ASSISTANT_WEBHOOK_PATH") || "/api/telegram-webhook";
+}
+
 async function sendTelegramMessage(
   chatId: string | number,
   text: string,
@@ -229,7 +233,7 @@ async function handleBillCommand(text: string, billAssistantUrl: string) {
 }
 
 async function forwardUpdate(targetBaseUrl: string, update: TelegramUpdate) {
-  const target = `${normalizeBaseUrl(targetBaseUrl)}/api/telegram-webhook`;
+  const target = `${normalizeBaseUrl(targetBaseUrl)}${investWebhookPath()}`;
   const response = await fetch(target, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -291,7 +295,7 @@ export default async (req: Request) => {
       [
         `${route.name}\u66ab\u6642\u6c92\u6709\u56de\u61c9\u3002`,
         "",
-        `\u76ee\u6a19\uff1a${normalizeBaseUrl(route.url)}${text.startsWith("/bill") ? "/api/bills" : "/api/telegram-webhook"}`,
+        `\u76ee\u6a19\uff1a${normalizeBaseUrl(route.url)}${text.startsWith("/bill") ? "/api/bills" : investWebhookPath()}`,
         `\u932f\u8aa4\uff1a${String(error).slice(0, 500)}`,
       ].join("\n"),
     );
