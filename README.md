@@ -5,7 +5,9 @@ Telegram can only use one webhook URL per bot. This project is the central route
 ## Routes
 
 - `/bill` uses the bill assistant API and replies from this router
+- `/bill rule <name> <next_due_date> <interval_months> [amount]` adds recurring bill rules
 - `/invest` forwards to `INVEST_ASSISTANT_URL` plus `INVEST_ASSISTANT_WEBHOOK_PATH`
+- `/mem <content>` saves a quick note into the Notion Inbox database
 - `/help` is handled by this router
 
 ## Netlify Environment Variables
@@ -15,6 +17,8 @@ TELEGRAM_BOT_TOKEN
 BILL_ASSISTANT_URL
 INVEST_ASSISTANT_URL
 INVEST_ASSISTANT_WEBHOOK_PATH
+NOTION_TOKEN
+NOTION_INBOX_DATABASE_ID
 ```
 
 Example:
@@ -23,6 +27,7 @@ Example:
 BILL_ASSISTANT_URL=https://your-bill-assistant.netlify.app
 INVEST_ASSISTANT_URL=https://your-invest-assistant.netlify.app
 INVEST_ASSISTANT_WEBHOOK_PATH=/.netlify/functions/amber-telegram
+NOTION_INBOX_DATABASE_ID=5ad118591bcd4e7bbed8b5afd988c42e
 ```
 
 ## Telegram Webhook
@@ -31,4 +36,16 @@ After deploying this router, set the Telegram webhook to:
 
 ```text
 https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook?url=https://YOUR_ROUTER_SITE.netlify.app/api/telegram-router
+```
+
+Example bill rule command:
+
+```text
+/bill rule electricity 2026-07-15 2 1200
+```
+
+Example memory command:
+
+```text
+/mem 摩寶智販機下週要確認報價，還要問場地方電力規格
 ```
