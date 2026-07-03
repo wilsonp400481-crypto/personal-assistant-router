@@ -709,6 +709,15 @@ function urlValue(page: NotionPage, propertyName: string) {
   return page.properties?.[propertyName]?.url as string | undefined;
 }
 
+function numberValue(page: NotionPage, propertyName: string) {
+  const value = page.properties?.[propertyName]?.number;
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function formatProjectMoney(value: number | undefined) {
+  return value == null ? "未填" : `NT$${Math.round(value).toLocaleString("zh-TW")}`;
+}
+
 function pageTitleForConfig(page: NotionPage, config: SearchDatabaseConfig) {
   return textFromTitle(page.properties?.[config.titleProp]?.title);
 }
@@ -860,7 +869,7 @@ function askMultiDatabasePlan(question: string) {
   };
 }
 
-async function queryDatabaseItems(config: SearchDatabaseConfig, filter: Record<string, any>) {
+async function queryDatabaseItems(config: SearchDatabaseConfig, filter: Record<string, any>, pageSize = 5) {
   const token = env("NOTION_TOKEN");
   if (!token) throw new Error("Missing NOTION_TOKEN");
 
@@ -872,7 +881,7 @@ async function queryDatabaseItems(config: SearchDatabaseConfig, filter: Record<s
       "Notion-Version": "2022-06-28",
     },
     body: JSON.stringify({
-      page_size: 5,
+      page_size: pageSize,
       filter,
       sorts: [{ timestamp: "created_time", direction: "descending" }],
     }),
@@ -910,6 +919,86 @@ function formatDatabaseSection(config: SearchDatabaseConfig, pages: NotionPage[]
     ].filter(Boolean).join("\n");
   });
   return [`【${config.label}】`, ...lines].join("\n");
+}
+
+function projectConfig() {
+  return databaseConfigs().find((config) => config.label === "Projects 專案");
+}
+
+function isProjectBusinessQuestion(question: string) {
+  const normalized = question.toLowerCase();
+  return [
+    "毛利",
+    "售價",
+    "成本",
+    "forecast",
+    "預測",
+    "客戶",
+    "供應商",
+    "商務",
+    "報價",
+    "價格",
+    "營收",
+    "利潤",
+  ].some((term) => normalized.includes(term));
+}
+
+function formatProjectBusinessSection(question: string, pages: NotionPage[]) {
+  if (!pages.length) {
+    return [
+      `查詢：${question}`,
+      "",
+      "目前沒有找到未完成專案的商務資料。",
+    ].join("\n");
+  }
+
+  const lines = pages.map((page, index) => {
+    const config = projectConfig();
+    const title = config ? pageTitleForConfig(page, config) : "未命名";
+    const price = numberValue(page, "售價");
+    const cost = numberValue(page, "成本");
+    const margin = numberValue(page, "毛利");
+    const forecast = numberValue(page, "Forecast");
+    const calculatedMargin = margin ?? (
+      price != null && cost != null ? price - cost : undefined
+    );
+    const marginText = margin == null && calculatedMargin != null
+      ? `${formatProjectMoney(calculatedMargin)}（售價 - 成本）`
+      : formatProjectMoney(margin);
+    const meta = [
+      `客戶：${richTextValue(page, "客戶") || "未填"}`,
+      `供應商：${richTextValue(page, "供應商") || "未填"}`,
+      `售價：${formatProjectMoney(price)}`,
+      `成本：${formatProjectMoney(cost)}`,
+      `毛利：${marginText}`,
+      `Forecast：${formatProjectMoney(forecast)}`,
+      `狀態：${selectValue(page, "狀態") || "未設定"}`,
+    ];
+    const note = richTextValue(page, "備註");
+
+    return [
+      `${index + 1}. ${title}`,
+      `   ${meta.join(" / ")}`,
+      note ? `   備註：${note.slice(0, 100)}` : "",
+      page.url ? `   ${page.url}` : "",
+    ].filter(Boolean).join("\n");
+  });
+
+  return [
+    `查詢：${question}`,
+    "",
+    "【Projects 專案商務資料】",
+    ...lines,
+  ].join("\n");
+}
+
+async function handleProjectBusinessQuery(question: string) {
+  if (!isProjectBusinessQuestion(question)) return null;
+  const config = projectConfig();
+  if (!config) return null;
+  const filters = openDatabaseFilters(config);
+  const pages = await queryDatabaseItems(config, andFilter(filters), 10);
+  return formatProjectBusinessSection(question, pages);
 }
 
 function anyTitleFromPage(page: NotionPage) {
@@ -1003,11 +1092,15 @@ async function handleAskCommand(text: string) {
       "\u4f8b\uff1a/ask \u4eca\u5929\u8981\u505a\u4ec0\u9ebc",
       "\u4f8b\uff1a/ask \u9019\u9031\u8981\u8ffd\u8e64\u4ec0\u9ebc",
       "\u4f8b\uff1a/ask \u6469\u5bf6\u667a\u8ca9\u6a5f",
+      "\u4f8b\uff1a/ask \u6bdb\u5229",
       "\u4f8b\uff1a/ask \u5f85\u78ba\u8a8d",
       "\u4f8b\uff1a/ask \u6587\u4ef6",
       "\u4f8b\uff1a/ask \u8eca\u96aa",
     ].join("\n");
   }
+
+  const projectBusinessReply = await handleProjectBusinessQuery(question);
+  if (projectBusinessReply) return projectBusinessReply;
 
   const { label, filters } = askMultiDatabasePlan(question);
   const results = await Promise.all(

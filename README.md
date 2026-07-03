@@ -9,6 +9,7 @@ Telegram can only use one webhook URL per bot. This project is the central route
 - `/invest` forwards to `INVEST_ASSISTANT_URL` plus `INVEST_ASSISTANT_WEBHOOK_PATH`
 - `/mem <content>` saves a quick note into the Notion Inbox database and applies lightweight rule-based classification
 - `/ask <question>` queries Notion Inbox, Projects, Tasks, Knowledge, and Documents with lightweight rule-based filters
+- `/ask 毛利`, `/ask 售價`, `/ask 成本`, and `/ask Forecast` list Projects business fields directly
 - `/chatid` replies with the current Telegram chat ID for scheduled reminders
 - `/help` is handled by this router
 
