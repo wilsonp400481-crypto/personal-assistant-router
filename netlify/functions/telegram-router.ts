@@ -697,6 +697,12 @@ function selectValue(page: NotionPage, propertyName?: string) {
   return propertyName ? page.properties?.[propertyName]?.select?.name as string | undefined : undefined;
 }
 
+function statusOrSelectValue(page: NotionPage, propertyName?: string) {
+  if (!propertyName) return undefined;
+  const property = page.properties?.[propertyName];
+  return property?.status?.name as string | undefined ?? property?.select?.name as string | undefined;
+}
+
 function dateValue(page: NotionPage, propertyName?: string) {
   return propertyName ? page.properties?.[propertyName]?.date?.start as string | undefined : undefined;
 }
@@ -910,7 +916,7 @@ function formatDatabaseSection(config: SearchDatabaseConfig, pages: NotionPage[]
     const date = dateValue(page, config.dateProp);
     const type = selectValue(page, config.typeProp);
     const priority = selectValue(page, config.priorityProp);
-    const status = selectValue(page, config.statusProp);
+    const status = statusOrSelectValue(page, config.statusProp);
     const summary = pageSummaryForConfig(page, config);
     const meta = [
       date ? `日期：${date}` : "",
@@ -930,6 +936,73 @@ function formatDatabaseSection(config: SearchDatabaseConfig, pages: NotionPage[]
 
 function projectConfig() {
   return databaseConfigs().find((config) => config.label === "Projects 專案");
+}
+
+function taskConfig() {
+  return databaseConfigs().find((config) => config.label === "Tasks 任務");
+}
+
+function isTaskQuestion(question: string) {
+  const normalized = question.toLowerCase();
+  return ["待辦", "任務", "要做", "todo", "to-do", "task"].some((term) => normalized.includes(term));
+}
+
+function isOpenTask(page: NotionPage) {
+  const status = statusOrSelectValue(page, "狀態");
+  return !["完成", "取消", "已完成", "已取消"].includes(status ?? "");
+}
+
+function formatTaskSection(question: string, pages: NotionPage[]) {
+  const config = taskConfig();
+  const openPages = pages.filter(isOpenTask).slice(0, 10);
+  if (!openPages.length) {
+    return [
+      `查詢：${question}`,
+      "",
+      "目前沒有找到尚未完成的待辦事項。",
+    ].join("\n");
+  }
+
+  const lines = openPages.map((page, index) => {
+    const title = config ? pageTitleForConfig(page, config) : "未命名";
+    const dueDate = dateValue(page, "期限");
+    const status = statusOrSelectValue(page, "狀態") || "未設定";
+    const priority = selectValue(page, "優先度");
+    const waitingFor = richTextValue(page, "等待對象");
+    const note = richTextValue(page, "備註");
+    const meta = [
+      dueDate ? `期限：${dueDate}` : "",
+      `狀態：${status}`,
+      priority ? `優先度：${priority}` : "",
+      waitingFor ? `等待：${waitingFor}` : "",
+    ].filter(Boolean).join(" / ");
+
+    return [
+      `${index + 1}. ${title}`,
+      meta ? `   ${meta}` : "",
+      note ? `   ${note.slice(0, 100)}` : "",
+      page.url ? `   ${page.url}` : "",
+    ].filter(Boolean).join("\n");
+  });
+
+  return [
+    `查詢：${question}`,
+    "",
+    "【Tasks 待辦事項】",
+    ...lines,
+  ].join("\n");
+}
+
+async function handleTaskQuery(question: string) {
+  if (!isTaskQuestion(question)) return null;
+  const config = taskConfig();
+  if (!config) return null;
+  const pages = await queryDatabaseItems(
+    config,
+    { property: config.titleProp, title: { is_not_empty: true } },
+    25,
+  );
+  return formatTaskSection(question, pages);
 }
 
 function isProjectBusinessQuestion(question: string) {
@@ -1108,11 +1181,15 @@ async function handleAskCommand(text: string) {
       "\u4f8b\uff1a/ask \u9019\u9031\u8981\u8ffd\u8e64\u4ec0\u9ebc",
       "\u4f8b\uff1a/ask \u6469\u5bf6\u667a\u8ca9\u6a5f",
       "\u4f8b\uff1a/ask \u6bdb\u5229",
+      "\u4f8b\uff1a/ask \u5f85\u8fa6\u4e8b\u9805",
       "\u4f8b\uff1a/ask \u5f85\u78ba\u8a8d",
       "\u4f8b\uff1a/ask \u6587\u4ef6",
       "\u4f8b\uff1a/ask \u8eca\u96aa",
     ].join("\n");
   }
+
+  const taskReply = await handleTaskQuery(question);
+  if (taskReply) return taskReply;
 
   const projectBusinessReply = await handleProjectBusinessQuery(question);
   if (projectBusinessReply) return projectBusinessReply;
