@@ -624,6 +624,258 @@ function formatInboxItems(label: string, pages: NotionPage[]) {
   return [label, "", ...lines].join("\n\n");
 }
 
+type SearchDatabaseConfig = {
+  label: string;
+  databaseId: string;
+  titleProp: string;
+  textProps: string[];
+  dateProp?: string;
+  statusProp?: string;
+  typeProp?: string;
+  priorityProp?: string;
+  closedStatuses?: string[];
+};
+
+function databaseConfigs(): SearchDatabaseConfig[] {
+  return [
+    {
+      label: "Inbox 收件箱",
+      databaseId: env("NOTION_INBOX_DATABASE_ID") || "5ad118591bcd4e7bbed8b5afd988c42e",
+      titleProp: "標題",
+      textProps: ["摘要", "原始內容"],
+      dateProp: "偵測期限",
+      statusProp: "處理狀態",
+      typeProp: "分類",
+      priorityProp: "重要度",
+      closedStatuses: ["已歸檔", "略過"],
+    },
+    {
+      label: "Projects 專案",
+      databaseId: env("NOTION_PROJECTS_DATABASE_ID") || "c57faf0cad674051a1643b184b0bcc92",
+      titleProp: "專案名稱",
+      textProps: ["摘要", "下一步", "客戶", "供應商", "備註"],
+      dateProp: "目標日",
+      statusProp: "狀態",
+      priorityProp: "優先度",
+      closedStatuses: ["完成", "取消"],
+    },
+    {
+      label: "Tasks 任務",
+      databaseId: env("NOTION_TASKS_DATABASE_ID") || "5d2615b60bb4425698f6dbdac88604e7",
+      titleProp: "任務名稱",
+      textProps: ["備註", "等待對象"],
+      dateProp: "期限",
+      statusProp: "狀態",
+      priorityProp: "優先度",
+      closedStatuses: ["完成", "取消"],
+    },
+    {
+      label: "Knowledge 知識紀錄",
+      databaseId: env("NOTION_KNOWLEDGE_DATABASE_ID") || "b9dbd4c4632b4f1c8f112637b497dc67",
+      titleProp: "標題",
+      textProps: ["摘要", "原文"],
+      dateProp: "日期",
+      typeProp: "類型",
+      priorityProp: "重要度",
+    },
+    {
+      label: "Documents 文件",
+      databaseId: env("NOTION_DOCUMENTS_DATABASE_ID") || "1597be16acb64bd698d2642d5f068f9a",
+      titleProp: "文件名稱",
+      textProps: ["摘要", "來源URL"],
+      dateProp: "關鍵日期",
+      statusProp: "狀態",
+      typeProp: "文件類型",
+      closedStatuses: [],
+    },
+  ];
+}
+
+function selectValue(page: NotionPage, propertyName?: string) {
+  return propertyName ? page.properties?.[propertyName]?.select?.name as string | undefined : undefined;
+}
+
+function dateValue(page: NotionPage, propertyName?: string) {
+  return propertyName ? page.properties?.[propertyName]?.date?.start as string | undefined : undefined;
+}
+
+function richTextValue(page: NotionPage, propertyName: string) {
+  return textFromRichText(page.properties?.[propertyName]?.rich_text);
+}
+
+function pageTitleForConfig(page: NotionPage, config: SearchDatabaseConfig) {
+  return textFromTitle(page.properties?.[config.titleProp]?.title);
+}
+
+function pageSummaryForConfig(page: NotionPage, config: SearchDatabaseConfig) {
+  for (const propertyName of config.textProps) {
+    const value = richTextValue(page, propertyName);
+    if (value) return value;
+  }
+  return "";
+}
+
+function andFilter(filters: Record<string, any>[]) {
+  return filters.length === 1 ? filters[0] : { and: filters };
+}
+
+function openDatabaseFilters(config: SearchDatabaseConfig) {
+  return (config.closedStatuses ?? []).map((status) => ({
+    property: config.statusProp,
+    select: { does_not_equal: status },
+  })).filter((filter) => filter.property);
+}
+
+function keywordFilterForConfig(config: SearchDatabaseConfig, keyword: string) {
+  const keywordFilters = [
+    { property: config.titleProp, title: { contains: keyword } },
+    ...config.textProps.map((propertyName) => ({ property: propertyName, rich_text: { contains: keyword } })),
+  ];
+  return andFilter([
+    ...openDatabaseFilters(config),
+    { or: keywordFilters },
+  ]);
+}
+
+function dateFilterForConfig(config: SearchDatabaseConfig, targetDate: string) {
+  if (!config.dateProp) return undefined;
+  return andFilter([
+    ...openDatabaseFilters(config),
+    { property: config.dateProp, date: { on_or_before: targetDate } },
+  ]);
+}
+
+function pendingFilterForConfig(config: SearchDatabaseConfig) {
+  if (!config.statusProp) return undefined;
+  const pendingTerms = ["需要確認", "等待他人", "等待中", "待辦", "進行中", "待整理"];
+  return andFilter([
+    ...openDatabaseFilters(config),
+    { or: pendingTerms.map((status) => ({ property: config.statusProp, select: { equals: status } })) },
+  ]);
+}
+
+function documentFilterForConfig(config: SearchDatabaseConfig) {
+  if (config.label === "Documents 文件") {
+    return andFilter([
+      ...openDatabaseFilters(config),
+      { property: config.titleProp, title: { is_not_empty: true } },
+    ]);
+  }
+  if (!config.typeProp) return undefined;
+  return andFilter([
+    ...openDatabaseFilters(config),
+    { property: config.typeProp, select: { equals: "文件" } },
+  ]);
+}
+
+function askMultiDatabasePlan(question: string) {
+  const today = taipeiDateText();
+  const weekEnd = addDaysText(today, 7);
+  const configs = databaseConfigs();
+
+  if (includesAny(question, ["今天", "今日", "today"])) {
+    return {
+      label: `今天 ${today} 到期或逾期的資料`,
+      filters: configs.map((config) => ({ config, filter: dateFilterForConfig(config, today) })).filter((item) => item.filter),
+    };
+  }
+
+  if (includesAny(question, ["這週", "本週", "這周", "本周", "week"])) {
+    return {
+      label: `這週（到 ${weekEnd}）要追蹤的資料`,
+      filters: configs.map((config) => ({ config, filter: dateFilterForConfig(config, weekEnd) })).filter((item) => item.filter),
+    };
+  }
+
+  if (includesAny(question, ["待確認", "需要確認", "確認", "待辦", "要做"])) {
+    return {
+      label: "待確認或待處理的資料",
+      filters: configs.map((config) => ({ config, filter: pendingFilterForConfig(config) })).filter((item) => item.filter),
+    };
+  }
+
+  if (includesAny(question, ["文件", "合約", "保單", "發票", "檔案", "pdf"])) {
+    const keyword = question.replace(/^文件|文件$/g, "").trim();
+    return {
+      label: keyword ? `與「${keyword}」相關的文件與記憶` : "文件相關資料",
+      filters: configs.map((config) => ({
+        config,
+        filter: keyword ? keywordFilterForConfig(config, keyword) : documentFilterForConfig(config),
+      })).filter((item) => item.filter),
+    };
+  }
+
+  const keyword = question.trim();
+  return {
+    label: `與「${keyword}」相關的資料`,
+    filters: configs.map((config) => ({ config, filter: keywordFilterForConfig(config, keyword) })),
+  };
+}
+
+async function queryDatabaseItems(config: SearchDatabaseConfig, filter: Record<string, any>) {
+  const token = env("NOTION_TOKEN");
+  if (!token) throw new Error("Missing NOTION_TOKEN");
+
+  const response = await fetch(`https://api.notion.com/v1/databases/${config.databaseId}/query`, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${token}`,
+      "Content-Type": "application/json",
+      "Notion-Version": "2022-06-28",
+    },
+    body: JSON.stringify({
+      page_size: 5,
+      filter,
+      sorts: [{ timestamp: "created_time", direction: "descending" }],
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`${config.label}: ${response.status} ${body.slice(0, 300)}`);
+  }
+
+  const data = await response.json() as { results?: NotionPage[] };
+  return data.results ?? [];
+}
+
+function formatDatabaseSection(config: SearchDatabaseConfig, pages: NotionPage[]) {
+  if (!pages.length) return "";
+  const lines = pages.map((page, index) => {
+    const title = pageTitleForConfig(page, config);
+    const date = dateValue(page, config.dateProp);
+    const type = selectValue(page, config.typeProp);
+    const priority = selectValue(page, config.priorityProp);
+    const status = selectValue(page, config.statusProp);
+    const summary = pageSummaryForConfig(page, config);
+    const meta = [
+      date ? `日期：${date}` : "",
+      type ? `類型：${type}` : "",
+      priority ? `重要度：${priority}` : "",
+      status ? `狀態：${status}` : "",
+    ].filter(Boolean).join(" / ");
+    return [
+      `${index + 1}. ${title}`,
+      meta ? `   ${meta}` : "",
+      summary ? `   ${summary.slice(0, 120)}` : "",
+      page.url ? `   ${page.url}` : "",
+    ].filter(Boolean).join("\n");
+  });
+  return [`【${config.label}】`, ...lines].join("\n");
+}
+
+function formatMultiDatabaseResults(label: string, results: Array<{ config: SearchDatabaseConfig; pages: NotionPage[] }>) {
+  const sections = results
+    .map(({ config, pages }) => formatDatabaseSection(config, pages))
+    .filter(Boolean);
+
+  if (!sections.length) {
+    return [label, "", "目前沒有在任何資料庫找到符合條件的資料。"].join("\n");
+  }
+
+  return [label, "", ...sections].join("\n\n");
+}
+
 async function handleAskCommand(text: string) {
   const question = trimCommand(text, "/ask");
   if (!question) {
@@ -635,12 +887,18 @@ async function handleAskCommand(text: string) {
       "\u4f8b\uff1a/ask \u6469\u5bf6\u667a\u8ca9\u6a5f",
       "\u4f8b\uff1a/ask \u5f85\u78ba\u8a8d",
       "\u4f8b\uff1a/ask \u6587\u4ef6",
+      "\u4f8b\uff1a/ask \u8eca\u96aa",
     ].join("\n");
   }
 
-  const { label, filter } = askFilter(question);
-  const pages = await queryInboxItems(filter);
-  return formatInboxItems(label, pages);
+  const { label, filters } = askMultiDatabasePlan(question);
+  const results = await Promise.all(
+    filters.map(async ({ config, filter }) => ({
+      config,
+      pages: await queryDatabaseItems(config, filter as Record<string, any>),
+    })),
+  );
+  return formatMultiDatabaseResults(label, results);
 }
 
 function targetTextForError(route: { name: string; url?: string }, text: string) {
