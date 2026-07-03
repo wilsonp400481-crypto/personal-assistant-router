@@ -13,6 +13,24 @@ Telegram can only use one webhook URL per bot. This project is the central route
 - `/chatid` replies with the current Telegram chat ID for scheduled reminders
 - `/help` is handled by this router
 
+## Notion to Google Calendar Sync
+
+`calendar-sync` runs every 15 minutes. It scans `Tasks 任務` and syncs tasks to Google Calendar when:
+
+- `同步到日曆` is checked
+- `期限` has a date
+- `狀態` is not `完成` or `取消`
+
+If a synced task is completed, cancelled, or unchecked, the matching Google Calendar event is deleted and the task is marked `已取消`.
+
+Required Notion task fields:
+
+- `同步到日曆`
+- `Google Calendar Event ID`
+- `日曆同步狀態`
+- `上次日曆同步時間`
+- `日曆同步錯誤`
+
 ## Netlify Environment Variables
 
 ```text
@@ -27,6 +45,10 @@ NOTION_TASKS_DATABASE_ID
 NOTION_KNOWLEDGE_DATABASE_ID
 NOTION_DOCUMENTS_DATABASE_ID
 TELEGRAM_REMINDER_CHAT_ID
+GOOGLE_CLIENT_ID
+GOOGLE_CLIENT_SECRET
+GOOGLE_REFRESH_TOKEN
+GOOGLE_CALENDAR_ID
 ```
 
 Example:
@@ -40,6 +62,7 @@ NOTION_PROJECTS_DATABASE_ID=c57faf0cad674051a1643b184b0bcc92
 NOTION_TASKS_DATABASE_ID=5d2615b60bb4425698f6dbdac88604e7
 NOTION_KNOWLEDGE_DATABASE_ID=b9dbd4c4632b4f1c8f112637b497dc67
 NOTION_DOCUMENTS_DATABASE_ID=1597be16acb64bd698d2642d5f068f9a
+GOOGLE_CALENDAR_ID=primary
 ```
 
 `daily-reminder` is a scheduled function that runs at 09:00 Asia/Taipei every day. It queries Notion Inbox items whose `偵測期限` is today or overdue and sends them to `TELEGRAM_REMINDER_CHAT_ID`.
