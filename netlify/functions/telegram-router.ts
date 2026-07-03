@@ -629,6 +629,7 @@ type SearchDatabaseConfig = {
   databaseId: string;
   titleProp: string;
   textProps: string[];
+  urlProps?: string[];
   dateProp?: string;
   statusProp?: string;
   typeProp?: string;
@@ -682,7 +683,8 @@ function databaseConfigs(): SearchDatabaseConfig[] {
       label: "Documents 文件",
       databaseId: env("NOTION_DOCUMENTS_DATABASE_ID") || "1597be16acb64bd698d2642d5f068f9a",
       titleProp: "文件名稱",
-      textProps: ["摘要", "來源URL"],
+      textProps: ["摘要"],
+      urlProps: ["來源URL"],
       dateProp: "關鍵日期",
       statusProp: "狀態",
       typeProp: "文件類型",
@@ -703,6 +705,10 @@ function richTextValue(page: NotionPage, propertyName: string) {
   return textFromRichText(page.properties?.[propertyName]?.rich_text);
 }
 
+function urlValue(page: NotionPage, propertyName: string) {
+  return page.properties?.[propertyName]?.url as string | undefined;
+}
+
 function pageTitleForConfig(page: NotionPage, config: SearchDatabaseConfig) {
   return textFromTitle(page.properties?.[config.titleProp]?.title);
 }
@@ -710,6 +716,10 @@ function pageTitleForConfig(page: NotionPage, config: SearchDatabaseConfig) {
 function pageSummaryForConfig(page: NotionPage, config: SearchDatabaseConfig) {
   for (const propertyName of config.textProps) {
     const value = richTextValue(page, propertyName);
+    if (value) return value;
+  }
+  for (const propertyName of config.urlProps ?? []) {
+    const value = urlValue(page, propertyName);
     if (value) return value;
   }
   return "";
@@ -727,14 +737,52 @@ function openDatabaseFilters(config: SearchDatabaseConfig) {
 }
 
 function keywordFilterForConfig(config: SearchDatabaseConfig, keyword: string) {
-  const keywordFilters = [
-    { property: config.titleProp, title: { contains: keyword } },
-    ...config.textProps.map((propertyName) => ({ property: propertyName, rich_text: { contains: keyword } })),
-  ];
+  const terms = expandSearchTerms(keyword);
+  const keywordFilters = terms.flatMap((term) => [
+    { property: config.titleProp, title: { contains: term } },
+    ...config.textProps.map((propertyName) => ({ property: propertyName, rich_text: { contains: term } })),
+    ...(config.urlProps ?? []).map((propertyName) => ({ property: propertyName, url: { contains: term } })),
+  ]);
   return andFilter([
     ...openDatabaseFilters(config),
     { or: keywordFilters },
   ]);
+}
+
+function uniqueValues(values: string[]) {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function expandSearchTerms(question: string) {
+  const compact = question
+    .replace(/^查詢|^查|^找|^搜尋|有沒有|什麼時候|目前|相關|資料|內容|紀錄|記錄/g, " ")
+    .replace(/[，,。！？?、/\\|()[\]{}:：;；]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const baseTerms = compact ? compact.split(" ") : [question.trim()];
+  const terms = [...baseTerms, compact];
+
+  for (const term of baseTerms) {
+    if (/^[\u4e00-\u9fff]{4,}$/.test(term)) {
+      terms.push(term.slice(0, 2), term.slice(0, 3), term.slice(-2), term.slice(-3));
+    }
+  }
+
+  const synonymGroups = [
+    ["車險", "汽車保險", "保單", "強制險", "任意險", "保險"],
+    ["合約", "契約", "合同"],
+    ["報價", "quote", "quotation", "估價", "價格"],
+    ["發票", "invoice", "收據"],
+    ["摩寶智販機", "摩寶", "智販機", "販賣機"],
+  ];
+
+  for (const group of synonymGroups) {
+    if (group.some((word) => question.includes(word))) {
+      terms.push(...group);
+    }
+  }
+
+  return uniqueValues(terms).slice(0, 12);
 }
 
 function dateFilterForConfig(config: SearchDatabaseConfig, targetDate: string) {
@@ -864,10 +912,80 @@ function formatDatabaseSection(config: SearchDatabaseConfig, pages: NotionPage[]
   return [`【${config.label}】`, ...lines].join("\n");
 }
 
-function formatMultiDatabaseResults(label: string, results: Array<{ config: SearchDatabaseConfig; pages: NotionPage[] }>) {
+function anyTitleFromPage(page: NotionPage) {
+  const properties = page.properties ?? {};
+  for (const value of Object.values(properties)) {
+    if (value?.type === "title" || value?.title) {
+      const title = textFromTitle(value.title);
+      if (title && title !== "\u672a\u547d\u540d") return title;
+    }
+  }
+  const title = (page as any).title;
+  if (Array.isArray(title)) return textFromTitle(title);
+  return "\u672a\u547d\u540d";
+}
+
+async function queryNotionGlobalSearch(question: string) {
+  const token = env("NOTION_TOKEN");
+  if (!token) throw new Error("Missing NOTION_TOKEN");
+
+  const terms = expandSearchTerms(question).slice(0, 5);
+  const results: NotionPage[] = [];
+  const seen = new Set<string>();
+
+  for (const term of terms) {
+    const response = await fetch("https://api.notion.com/v1/search", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Content-Type": "application/json",
+        "Notion-Version": "2022-06-28",
+      },
+      body: JSON.stringify({
+        query: term,
+        page_size: 5,
+        filter: { property: "object", value: "page" },
+        sort: { direction: "descending", timestamp: "last_edited_time" },
+      }),
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`Notion search: ${response.status} ${body.slice(0, 300)}`);
+    }
+
+    const data = await response.json() as { results?: NotionPage[] };
+    for (const page of data.results ?? []) {
+      const key = page.url ?? JSON.stringify(page.properties ?? {}).slice(0, 120);
+      if (!seen.has(key)) {
+        seen.add(key);
+        results.push(page);
+      }
+    }
+  }
+
+  return results.slice(0, 8);
+}
+
+function formatGlobalSearchSection(pages: NotionPage[]) {
+  if (!pages.length) return "";
+  const lines = pages.map((page, index) => [
+    `${index + 1}. ${anyTitleFromPage(page)}`,
+    page.url ? `   ${page.url}` : "",
+  ].filter(Boolean).join("\n"));
+  return ["【Notion 全域補查】", ...lines].join("\n");
+}
+
+function formatMultiDatabaseResults(
+  label: string,
+  results: Array<{ config: SearchDatabaseConfig; pages: NotionPage[] }>,
+  globalPages: NotionPage[] = [],
+) {
   const sections = results
     .map(({ config, pages }) => formatDatabaseSection(config, pages))
     .filter(Boolean);
+  const globalSection = formatGlobalSearchSection(globalPages);
+  if (globalSection) sections.push(globalSection);
 
   if (!sections.length) {
     return [label, "", "目前沒有在任何資料庫找到符合條件的資料。"].join("\n");
@@ -898,7 +1016,9 @@ async function handleAskCommand(text: string) {
       pages: await queryDatabaseItems(config, filter as Record<string, any>),
     })),
   );
-  return formatMultiDatabaseResults(label, results);
+  const resultCount = results.reduce((count, result) => count + result.pages.length, 0);
+  const globalPages = resultCount < 5 ? await queryNotionGlobalSearch(question) : [];
+  return formatMultiDatabaseResults(label, results, globalPages);
 }
 
 function targetTextForError(route: { name: string; url?: string }, text: string) {

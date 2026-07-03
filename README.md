@@ -75,3 +75,5 @@ Example memory query commands:
 /ask 文件
 /ask 車險
 ```
+
+`/ask` expands common keywords and synonyms before searching. For example, `車險` also searches terms like `汽車保險`, `保單`, `強制險`, and `任意險`. If database field results are sparse, it also performs a Notion-wide page title search as a fallback.
