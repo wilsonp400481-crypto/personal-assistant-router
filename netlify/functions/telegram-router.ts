@@ -804,7 +804,14 @@ function dateFilterForConfig(config: SearchDatabaseConfig, targetDate: string) {
 
 function pendingFilterForConfig(config: SearchDatabaseConfig) {
   if (!config.statusProp) return undefined;
-  const pendingTerms = ["需要確認", "等待他人", "等待中", "待辦", "進行中", "待整理"];
+  const pendingTermsByDatabase: Record<string, string[]> = {
+    "Inbox 收件箱": ["需要確認", "待整理"],
+    "Projects 專案": ["需要確認", "等待他人", "等待中", "待辦", "進行中", "待整理"],
+    "Tasks 任務": ["需要確認", "等待他人", "等待中", "待辦", "進行中", "待整理"],
+    "Documents 文件": ["需要確認", "待整理", "已摘要"],
+  };
+  const pendingTerms = pendingTermsByDatabase[config.label] ?? [];
+  if (!pendingTerms.length) return undefined;
   return andFilter([
     ...openDatabaseFilters(config),
     { or: pendingTerms.map((status) => ({ property: config.statusProp, select: { equals: status } })) },
@@ -1067,7 +1074,7 @@ function formatGlobalSearchSection(pages: NotionPage[]) {
 
 function formatMultiDatabaseResults(
   label: string,
-  results: Array<{ config: SearchDatabaseConfig; pages: NotionPage[] }>,
+  results: Array<{ config: SearchDatabaseConfig; pages: NotionPage[]; error?: string }>,
   globalPages: NotionPage[] = [],
 ) {
   const sections = results
@@ -1075,6 +1082,14 @@ function formatMultiDatabaseResults(
     .filter(Boolean);
   const globalSection = formatGlobalSearchSection(globalPages);
   if (globalSection) sections.push(globalSection);
+  const errors = results.filter((result) => result.error);
+  const errorSection = errors.length
+    ? [
+      "【部分資料庫略過】",
+      ...errors.map((result) => `${result.config.label}：${result.error}`),
+    ].join("\n")
+    : "";
+  if (errorSection) sections.push(errorSection);
 
   if (!sections.length) {
     return [label, "", "目前沒有在任何資料庫找到符合條件的資料。"].join("\n");
@@ -1104,10 +1119,20 @@ async function handleAskCommand(text: string) {
 
   const { label, filters } = askMultiDatabasePlan(question);
   const results = await Promise.all(
-    filters.map(async ({ config, filter }) => ({
-      config,
-      pages: await queryDatabaseItems(config, filter as Record<string, any>),
-    })),
+    filters.map(async ({ config, filter }) => {
+      try {
+        return {
+          config,
+          pages: await queryDatabaseItems(config, filter as Record<string, any>),
+        };
+      } catch (error) {
+        return {
+          config,
+          pages: [],
+          error: String(error).slice(0, 160),
+        };
+      }
+    }),
   );
   const resultCount = results.reduce((count, result) => count + result.pages.length, 0);
   const globalPages = resultCount < 5 ? await queryNotionGlobalSearch(question) : [];
