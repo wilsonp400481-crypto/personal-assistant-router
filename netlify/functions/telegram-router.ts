@@ -96,6 +96,7 @@ function helpText() {
     "",
     "/invest <\u554f\u984c> - \u8a62\u554f\u6295\u8cc7\u52a9\u7406",
     "/mem <\u5167\u5bb9> - \u8a18\u5230 Notion \u6536\u4ef6\u7bb1",
+    "/chatid - \u986f\u793a\u9019\u500b Telegram \u804a\u5929\u7684 ID",
     "",
     "\u4e5f\u53ef\u4ee5\u76f4\u63a5\u9ede\u4e0b\u65b9\u6309\u9215\u958b\u555f PWA\u3002",
   ].join("\n");
@@ -471,6 +472,20 @@ export default async (req: Request) => {
   if (text.startsWith("/start") || text.startsWith("/help") || text.startsWith("/apps")) {
     await sendTelegramMessage(chatId, helpText(), appKeyboard());
     return Response.json({ ok: true, routed: "help" });
+  }
+
+  if (text.startsWith("/chatid")) {
+    await sendTelegramMessage(
+      chatId,
+      [
+        "\u9019\u500b Telegram \u804a\u5929\u7684 ID \u662f\uff1a",
+        "",
+        String(chatId),
+        "",
+        "\u8acb\u628a\u9019\u500b\u503c\u586b\u5230 Netlify Environment variable\uff1aTELEGRAM_REMINDER_CHAT_ID",
+      ].join("\n"),
+    );
+    return Response.json({ ok: true, routed: "chat-id" });
   }
 
   const route = routeFor(text);

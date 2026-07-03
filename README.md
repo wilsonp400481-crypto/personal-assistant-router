@@ -8,6 +8,7 @@ Telegram can only use one webhook URL per bot. This project is the central route
 - `/bill rule <name> <next_due_date> <interval_months> [amount]` adds recurring bill rules
 - `/invest` forwards to `INVEST_ASSISTANT_URL` plus `INVEST_ASSISTANT_WEBHOOK_PATH`
 - `/mem <content>` saves a quick note into the Notion Inbox database and applies lightweight rule-based classification
+- `/chatid` replies with the current Telegram chat ID for scheduled reminders
 - `/help` is handled by this router
 
 ## Netlify Environment Variables
@@ -19,6 +20,7 @@ INVEST_ASSISTANT_URL
 INVEST_ASSISTANT_WEBHOOK_PATH
 NOTION_TOKEN
 NOTION_INBOX_DATABASE_ID
+TELEGRAM_REMINDER_CHAT_ID
 ```
 
 Example:
@@ -29,6 +31,8 @@ INVEST_ASSISTANT_URL=https://your-invest-assistant.netlify.app
 INVEST_ASSISTANT_WEBHOOK_PATH=/.netlify/functions/amber-telegram
 NOTION_INBOX_DATABASE_ID=5ad118591bcd4e7bbed8b5afd988c42e
 ```
+
+`daily-reminder` is a scheduled function that runs at 09:00 Asia/Taipei every day. It queries Notion Inbox items whose `偵測期限` is today or overdue and sends them to `TELEGRAM_REMINDER_CHAT_ID`.
 
 ## Telegram Webhook
 
