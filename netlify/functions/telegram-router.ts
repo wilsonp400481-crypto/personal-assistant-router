@@ -31,6 +31,15 @@ type NotionText = {
   text: { content: string };
 };
 
+type NotionTextValue = {
+  plain_text?: string;
+};
+
+type NotionPage = {
+  url?: string;
+  properties?: Record<string, any>;
+};
+
 type MemoryClassification = {
   category: "任務" | "專案資訊" | "決策" | "想法" | "文件" | "待追蹤" | "其他";
   priority: "高" | "中" | "低";
@@ -96,6 +105,7 @@ function helpText() {
     "",
     "/invest <\u554f\u984c> - \u8a62\u554f\u6295\u8cc7\u52a9\u7406",
     "/mem <\u5167\u5bb9> - \u8a18\u5230 Notion \u6536\u4ef6\u7bb1",
+    "/ask <\u554f\u984c> - \u67e5\u8a62 Notion \u8a18\u61b6",
     "/chatid - \u986f\u793a\u9019\u500b Telegram \u804a\u5929\u7684 ID",
     "",
     "\u4e5f\u53ef\u4ee5\u76f4\u63a5\u9ede\u4e0b\u65b9\u6309\u9215\u958b\u555f PWA\u3002",
@@ -126,6 +136,9 @@ function routeFor(text: string) {
   }
   if (text.startsWith("/mem")) {
     return { name: "\u8a18\u61b6\u52a9\u7406", url: "notion" };
+  }
+  if (text.startsWith("/ask")) {
+    return { name: "\u67e5\u8a62\u52a9\u7406", url: "notion" };
   }
   return null;
 }
@@ -450,8 +463,189 @@ async function handleMemoryCommand(text: string) {
   ].filter(Boolean).join("\n");
 }
 
+function taipeiDateText(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Taipei",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function addDaysText(dateText: string, days: number) {
+  const [year, month, day] = dateText.split("-").map(Number);
+  return formatDate(addDays(new Date(Date.UTC(year, month - 1, day)), days));
+}
+
+function textFromTitle(value: NotionTextValue[] | undefined) {
+  return value?.map((item) => item.plain_text ?? "").join("").trim() || "\u672a\u547d\u540d";
+}
+
+function textFromRichText(value: NotionTextValue[] | undefined) {
+  return value?.map((item) => item.plain_text ?? "").join("").trim() || "";
+}
+
+function pageTitle(page: NotionPage) {
+  return textFromTitle(page.properties?.["\u6a19\u984c"]?.title);
+}
+
+function pageSummary(page: NotionPage) {
+  return textFromRichText(page.properties?.["\u6458\u8981"]?.rich_text)
+    || textFromRichText(page.properties?.["\u539f\u59cb\u5167\u5bb9"]?.rich_text);
+}
+
+function pageSelect(page: NotionPage, propertyName: string) {
+  return page.properties?.[propertyName]?.select?.name as string | undefined;
+}
+
+function pageDate(page: NotionPage) {
+  return page.properties?.["\u5075\u6e2c\u671f\u9650"]?.date?.start as string | undefined;
+}
+
+function openInboxFilter(extra?: Record<string, any>) {
+  const filters: Array<Record<string, any>> = [
+    { property: "\u8655\u7406\u72c0\u614b", select: { does_not_equal: "\u5df2\u6b78\u6a94" } },
+    { property: "\u8655\u7406\u72c0\u614b", select: { does_not_equal: "\u7565\u904e" } },
+  ];
+  if (extra) filters.push(extra);
+  return { and: filters };
+}
+
+function askFilter(question: string) {
+  const today = taipeiDateText();
+  const weekEnd = addDaysText(today, 7);
+  if (includesAny(question, ["\u4eca\u5929", "\u4eca\u65e5", "today"])) {
+    return {
+      label: `\u4eca\u5929 ${today} \u5230\u671f\u6216\u903e\u671f\u7684\u8a18\u61b6`,
+      filter: openInboxFilter({ property: "\u5075\u6e2c\u671f\u9650", date: { on_or_before: today } }),
+    };
+  }
+  if (includesAny(question, ["\u9019\u9031", "\u672c\u9031", "\u9019\u5468", "\u672c\u5468", "week"])) {
+    return {
+      label: `\u9019\u9031\uff08\u5230 ${weekEnd}\uff09\u8981\u8ffd\u8e64\u7684\u8a18\u61b6`,
+      filter: openInboxFilter({ property: "\u5075\u6e2c\u671f\u9650", date: { on_or_before: weekEnd } }),
+    };
+  }
+  if (includesAny(question, ["\u5f85\u78ba\u8a8d", "\u9700\u8981\u78ba\u8a8d", "\u78ba\u8a8d"])) {
+    return {
+      label: "\u9700\u8981\u78ba\u8a8d\u7684\u8a18\u61b6",
+      filter: openInboxFilter({
+        or: [
+          { property: "\u9700\u8981\u78ba\u8a8d", checkbox: { equals: true } },
+          { property: "\u8655\u7406\u72c0\u614b", select: { equals: "\u9700\u8981\u78ba\u8a8d" } },
+        ],
+      }),
+    };
+  }
+  if (includesAny(question, ["\u6587\u4ef6", "\u5408\u7d04", "\u4fdd\u55ae", "\u767c\u7968", "\u6a94\u6848", "pdf"])) {
+    return {
+      label: "\u6587\u4ef6\u985e\u8a18\u61b6",
+      filter: openInboxFilter({ property: "\u5206\u985e", select: { equals: "\u6587\u4ef6" } }),
+    };
+  }
+  if (includesAny(question, ["\u4efb\u52d9", "\u5f85\u8fa6", "\u8981\u505a"])) {
+    return {
+      label: "\u4efb\u52d9\u985e\u8a18\u61b6",
+      filter: openInboxFilter({ property: "\u5206\u985e", select: { equals: "\u4efb\u52d9" } }),
+    };
+  }
+
+  const keyword = question.trim();
+  return {
+    label: `\u8207\u300c${keyword}\u300d\u76f8\u95dc\u7684\u8a18\u61b6`,
+    filter: openInboxFilter({
+      or: [
+        { property: "\u6a19\u984c", title: { contains: keyword } },
+        { property: "\u6458\u8981", rich_text: { contains: keyword } },
+        { property: "\u539f\u59cb\u5167\u5bb9", rich_text: { contains: keyword } },
+      ],
+    }),
+  };
+}
+
+async function queryInboxItems(filter: Record<string, any>) {
+  const token = env("NOTION_TOKEN");
+  const databaseId = env("NOTION_INBOX_DATABASE_ID");
+  if (!token) throw new Error("Missing NOTION_TOKEN");
+  if (!databaseId) throw new Error("Missing NOTION_INBOX_DATABASE_ID");
+
+  const response = await fetch(`https://api.notion.com/v1/databases/${databaseId}/query`, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${token}`,
+      "Content-Type": "application/json",
+      "Notion-Version": "2022-06-28",
+    },
+    body: JSON.stringify({
+      page_size: 10,
+      filter,
+      sorts: [
+        { property: "\u5075\u6e2c\u671f\u9650", direction: "ascending" },
+        { timestamp: "created_time", direction: "descending" },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`${response.status} ${body.slice(0, 500)}`);
+  }
+
+  const data = await response.json() as { results?: NotionPage[] };
+  return data.results ?? [];
+}
+
+function formatInboxItems(label: string, pages: NotionPage[]) {
+  if (!pages.length) {
+    return [
+      label,
+      "",
+      "\u76ee\u524d\u6c92\u6709\u627e\u5230\u7b26\u5408\u689d\u4ef6\u7684\u8a18\u61b6\u3002",
+    ].join("\n");
+  }
+
+  const lines = pages.map((page, index) => {
+    const title = pageTitle(page);
+    const date = pageDate(page) ?? "\u672a\u8a2d\u5b9a";
+    const category = pageSelect(page, "\u5206\u985e") ?? "\u672a\u5206\u985e";
+    const priority = pageSelect(page, "\u91cd\u8981\u5ea6") ?? "\u672a\u8a2d\u5b9a";
+    const status = pageSelect(page, "\u8655\u7406\u72c0\u614b") ?? "\u672a\u8a2d\u5b9a";
+    const summary = pageSummary(page);
+    return [
+      `${index + 1}. ${title}`,
+      `   \u671f\u9650\uff1a${date} / \u5206\u985e\uff1a${category} / \u91cd\u8981\u5ea6\uff1a${priority} / \u72c0\u614b\uff1a${status}`,
+      summary ? `   ${summary.slice(0, 120)}` : "",
+      page.url ? `   ${page.url}` : "",
+    ].filter(Boolean).join("\n");
+  });
+
+  return [label, "", ...lines].join("\n\n");
+}
+
+async function handleAskCommand(text: string) {
+  const question = trimCommand(text, "/ask");
+  if (!question) {
+    return [
+      "\u683c\u5f0f\uff1a/ask <\u60f3\u67e5\u7684\u4e8b>",
+      "",
+      "\u4f8b\uff1a/ask \u4eca\u5929\u8981\u505a\u4ec0\u9ebc",
+      "\u4f8b\uff1a/ask \u9019\u9031\u8981\u8ffd\u8e64\u4ec0\u9ebc",
+      "\u4f8b\uff1a/ask \u6469\u5bf6\u667a\u8ca9\u6a5f",
+      "\u4f8b\uff1a/ask \u5f85\u78ba\u8a8d",
+      "\u4f8b\uff1a/ask \u6587\u4ef6",
+    ].join("\n");
+  }
+
+  const { label, filter } = askFilter(question);
+  const pages = await queryInboxItems(filter);
+  return formatInboxItems(label, pages);
+}
+
 function targetTextForError(route: { name: string; url?: string }, text: string) {
   if (text.startsWith("/mem")) return "Notion Inbox";
+  if (text.startsWith("/ask")) return "Notion Inbox";
   if (!route.url) return route.name;
   return `${normalizeBaseUrl(route.url)}${text.startsWith("/bill") ? "/api/bills" : investWebhookPath()}`;
 }
@@ -514,6 +708,12 @@ export default async (req: Request) => {
       const reply = await handleMemoryCommand(text);
       await sendTelegramMessage(chatId, reply, appKeyboard());
       return Response.json({ ok: true, routed: "notion-inbox" });
+    }
+
+    if (text.startsWith("/ask")) {
+      const reply = await handleAskCommand(text);
+      await sendTelegramMessage(chatId, reply);
+      return Response.json({ ok: true, routed: "notion-query" });
     }
 
     await forwardUpdate(route.url, update);

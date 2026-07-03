@@ -8,6 +8,7 @@ Telegram can only use one webhook URL per bot. This project is the central route
 - `/bill rule <name> <next_due_date> <interval_months> [amount]` adds recurring bill rules
 - `/invest` forwards to `INVEST_ASSISTANT_URL` plus `INVEST_ASSISTANT_WEBHOOK_PATH`
 - `/mem <content>` saves a quick note into the Notion Inbox database and applies lightweight rule-based classification
+- `/ask <question>` queries Notion Inbox with lightweight rule-based filters
 - `/chatid` replies with the current Telegram chat ID for scheduled reminders
 - `/help` is handled by this router
 
@@ -55,3 +56,13 @@ Example memory command:
 ```
 
 Memory notes are classified without AI tokens. The router sets Inbox fields such as `分類`, `摘要`, `重要度`, `偵測期限`, and `需要確認` using simple local rules.
+
+Example memory query commands:
+
+```text
+/ask 今天要做什麼
+/ask 這週要追蹤什麼
+/ask 摩寶智販機
+/ask 待確認
+/ask 文件
+```
