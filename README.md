@@ -7,7 +7,7 @@ Telegram can only use one webhook URL per bot. This project is the central route
 - `/bill` uses the bill assistant API and replies from this router
 - `/bill rule <name> <next_due_date> <interval_months> [amount]` adds recurring bill rules
 - `/invest` forwards to `INVEST_ASSISTANT_URL` plus `INVEST_ASSISTANT_WEBHOOK_PATH`
-- `/mem <content>` saves a quick note into the Notion Inbox database
+- `/mem <content>` saves a quick note into the Notion Inbox database and applies lightweight rule-based classification
 - `/help` is handled by this router
 
 ## Netlify Environment Variables
@@ -49,3 +49,5 @@ Example memory command:
 ```text
 /mem 摩寶智販機下週要確認報價，還要問場地方電力規格
 ```
+
+Memory notes are classified without AI tokens. The router sets Inbox fields such as `分類`, `摘要`, `重要度`, `偵測期限`, and `需要確認` using simple local rules.

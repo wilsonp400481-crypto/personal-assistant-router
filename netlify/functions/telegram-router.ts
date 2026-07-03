@@ -31,6 +31,14 @@ type NotionText = {
   text: { content: string };
 };
 
+type MemoryClassification = {
+  category: "任務" | "專案資訊" | "決策" | "想法" | "文件" | "待追蹤" | "其他";
+  priority: "高" | "中" | "低";
+  needsConfirm: boolean;
+  summary: string;
+  detectedDate?: string;
+};
+
 function env(name: string) {
   return Netlify.env.get(name);
 }
@@ -281,6 +289,86 @@ function richText(content: string): NotionText[] {
   return [{ type: "text", text: { content: content.slice(0, 2000) } }];
 }
 
+function includesAny(text: string, keywords: string[]) {
+  return keywords.some((keyword) => text.includes(keyword));
+}
+
+function addDays(date: Date, days: number) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function formatDate(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function detectDate(content: string) {
+  const isoDate = content.match(/\b(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})\b/);
+  if (isoDate) {
+    const [, year, month, day] = isoDate;
+    return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+  }
+
+  const monthDay = content.match(/\b(\d{1,2})[/-](\d{1,2})\b/);
+  if (monthDay) {
+    const now = new Date();
+    const [, month, day] = monthDay;
+    return `${now.getFullYear()}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+  }
+
+  const today = new Date();
+  if (content.includes("今天")) return formatDate(today);
+  if (content.includes("明天")) return formatDate(addDays(today, 1));
+  if (content.includes("後天")) return formatDate(addDays(today, 2));
+  if (content.includes("下週") || content.includes("下周")) return formatDate(addDays(today, 7));
+  if (content.includes("月底")) {
+    return formatDate(new Date(today.getFullYear(), today.getMonth() + 1, 0));
+  }
+
+  return undefined;
+}
+
+function summarizeMemory(content: string) {
+  const compact = content.replace(/\s+/g, " ").trim();
+  return compact.length > 120 ? `${compact.slice(0, 117)}...` : compact;
+}
+
+function classifyMemory(content: string): MemoryClassification {
+  const normalized = content.toLowerCase();
+  const detectedDate = detectDate(content);
+  const needsConfirm = includesAny(content, ["確認", "待確認", "問一下", "問問", "查一下", "查詢", "不確定"]);
+
+  let category: MemoryClassification["category"] = "其他";
+  if (includesAny(content, ["決定", "決議", "結論", "採用", "不採用", "選擇"])) {
+    category = "決策";
+  } else if (includesAny(content, ["文件", "合約", "保單", "發票", "收據", "截圖", "照片", "pdf", "檔案"])) {
+    category = "文件";
+  } else if (includesAny(content, ["要做", "待辦", "提醒", "追蹤", "確認", "聯絡", "回覆", "處理", "安排", "預約", "完成"])) {
+    category = detectedDate ? "任務" : "待追蹤";
+  } else if (includesAny(content, ["專案", "預算", "報價", "需求", "規格", "時程", "客戶", "供應商", "合作"])) {
+    category = "專案資訊";
+  } else if (includesAny(content, ["想法", "idea", "可以試", "也許", "靈感", "構想"])) {
+    category = "想法";
+  } else if (includesAny(normalized, ["note", "memo", "knowledge", "how to", "sop"])) {
+    category = "想法";
+  }
+
+  const priority = includesAny(content, ["緊急", "重要", "今天", "明天", "到期", "逾期"])
+    ? "高"
+    : detectedDate || needsConfirm
+      ? "中"
+      : "低";
+
+  return {
+    category,
+    priority,
+    needsConfirm,
+    summary: summarizeMemory(content),
+    detectedDate,
+  };
+}
+
 function paragraphChildren(content: string) {
   const chunks: string[] = [];
   for (let index = 0; index < content.length; index += 1900) {
@@ -302,6 +390,7 @@ async function createNotionInboxItem(content: string) {
   if (!databaseId) throw new Error("Missing NOTION_INBOX_DATABASE_ID");
 
   const title = titleFromMemory(content);
+  const classification = classifyMemory(content);
   const response = await fetch("https://api.notion.com/v1/pages", {
     method: "POST",
     headers: {
@@ -314,9 +403,15 @@ async function createNotionInboxItem(content: string) {
       properties: {
         "\u6a19\u984c": { title: richText(title) },
         "\u539f\u59cb\u5167\u5bb9": { rich_text: richText(content) },
+        "\u6458\u8981": { rich_text: richText(classification.summary) },
         "\u4f86\u6e90": { select: { name: "Telegram" } },
-        "\u8655\u7406\u72c0\u614b": { select: { name: "\u672a\u8655\u7406" } },
-        "\u9700\u8981\u78ba\u8a8d": { checkbox: false },
+        "\u5206\u985e": { select: { name: classification.category } },
+        "\u91cd\u8981\u5ea6": { select: { name: classification.priority } },
+        "\u8655\u7406\u72c0\u614b": { select: { name: classification.needsConfirm ? "\u9700\u8981\u78ba\u8a8d" : "\u5df2\u5206\u985e" } },
+        "\u9700\u8981\u78ba\u8a8d": { checkbox: classification.needsConfirm },
+        ...(classification.detectedDate
+          ? { "\u5075\u6e2c\u671f\u9650": { date: { start: classification.detectedDate } } }
+          : {}),
       },
       children: paragraphChildren(content),
     }),
@@ -327,7 +422,8 @@ async function createNotionInboxItem(content: string) {
     throw new Error(`${response.status} ${body.slice(0, 500)}`);
   }
 
-  return response.json() as Promise<{ url?: string }>;
+  const page = await response.json() as { url?: string };
+  return { page, classification };
 }
 
 async function handleMemoryCommand(text: string) {
@@ -340,13 +436,23 @@ async function handleMemoryCommand(text: string) {
     ].join("\n");
   }
 
-  const page = await createNotionInboxItem(content);
+  const { page, classification } = await createNotionInboxItem(content);
   return [
     "\u5df2\u8a18\u5230 Notion \u6536\u4ef6\u7bb1\u3002",
     "",
     `\u6a19\u984c\uff1a${titleFromMemory(content)}`,
+    `\u5206\u985e\uff1a${classification.category}`,
+    `\u91cd\u8981\u5ea6\uff1a${classification.priority}`,
+    classification.detectedDate ? `\u5075\u6e2c\u671f\u9650\uff1a${classification.detectedDate}` : "",
+    classification.needsConfirm ? "\u72c0\u614b\uff1a\u9700\u8981\u78ba\u8a8d" : "\u72c0\u614b\uff1a\u5df2\u5206\u985e",
     page.url ? `\u9023\u7d50\uff1a${page.url}` : "",
   ].filter(Boolean).join("\n");
+}
+
+function targetTextForError(route: { name: string; url?: string }, text: string) {
+  if (text.startsWith("/mem")) return "Notion Inbox";
+  if (!route.url) return route.name;
+  return `${normalizeBaseUrl(route.url)}${text.startsWith("/bill") ? "/api/bills" : investWebhookPath()}`;
 }
 
 export default async (req: Request) => {
@@ -404,7 +510,7 @@ export default async (req: Request) => {
       [
         `${route.name}\u66ab\u6642\u6c92\u6709\u56de\u61c9\u3002`,
         "",
-        `\u76ee\u6a19\uff1a${normalizeBaseUrl(route.url)}${text.startsWith("/bill") ? "/api/bills" : investWebhookPath()}`,
+        `\u76ee\u6a19\uff1a${targetTextForError(route, text)}`,
         `\u932f\u8aa4\uff1a${String(error).slice(0, 500)}`,
       ].join("\n"),
     );
